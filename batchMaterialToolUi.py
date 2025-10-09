@@ -34,7 +34,7 @@ class BatchMaterialTool(QtWidgets.QDialog):
         
         self.type_layout = QtWidgets.QHBoxLayout()
         self.type_combo = QtWidgets.QComboBox()
-        self.type_combo.addItems(["Lambert", "Blinn", "Phong", "Standard Surface"])
+        self.type_combo.addItems(["Lambert", "Blinn", "Standard Surface"])
         self.color_button = QtWidgets.QPushButton("Choose Color")
         self.random_color_checkbox = QtWidgets.QCheckBox("Random Color")
         self.type_layout.addWidget(QtWidgets.QLabel("Material Type:"))
