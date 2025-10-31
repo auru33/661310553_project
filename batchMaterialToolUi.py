@@ -5,6 +5,12 @@ except ImportError:
     from PySide2 import QtCore, QtGui, QtWidgets
     from shiboken2 import wrapInstance
 
+import importlib
+from . import batchMaterialToolUtil
+importlib.reload(batchMaterialToolUtil)
+
+
+import random
 import maya.OpenMayaUI as omui
 import maya.cmds as cmds
 
@@ -37,6 +43,7 @@ class BatchMaterialTool(QtWidgets.QDialog):
         self.typeLayout = QtWidgets.QHBoxLayout()
         self.typeCombo = QtWidgets.QComboBox()
         self.typeCombo.addItems(["Lambert", "Blinn", "Standard Surface"])
+        self.typeCombo.setStyleSheet("QComboBox { background-color: #2E5B99; }")
         self.colorButton = QtWidgets.QPushButton("Choose Color")
         self.colorButton.clicked.connect(self.choose_color)
         self.randomColorCheckbox = QtWidgets.QCheckBox("Random Color")
@@ -68,16 +75,49 @@ class BatchMaterialTool(QtWidgets.QDialog):
 
         self.renameButton.clicked.connect(self.rename_and_assign)
         self.resetButton.clicked.connect(self.reset_ui)
+        self.previewButton.clicked.connect(self.preview_materials)
         self.colorButton.setStyleSheet("QPushButton { background-color: #4283DD; color: white; }")
+
+        buttonDown_style = """
+        QPushButton {background-color: #2E5B99; border-radius: 20px; font-size: 22px; padding: 12px;}
+        QPushButton:hover {background-color: #4587E6; color: white;}
+        QPushButton:pressed {background-color: #193255;}
+        """
+
+        self.renameButton.setStyleSheet(buttonDown_style)
+        self.previewButton.setStyleSheet(buttonDown_style)
+        self.resetButton.setStyleSheet(buttonDown_style)
 
         self.chosenColor = QtGui.QColor(255, 255, 255)
 
 
     def choose_color(self):
-        color = QtWidgets.QColorDialog.getColor(self.chosenColor, self, "Choose Material Color")
-        if color.isValid():
-            self.chosenColor = color
-            self.colorButton.setStyleSheet(f"QPushButton {{ background-color: {color.name()}; color: white; }}")
+        colorDialog = QtWidgets.QColorDialog(self)
+        colorDialog.setOption(QtWidgets.QColorDialog.DontUseNativeDialog, True)
+        usLocale = QtCore.QLocale(QtCore.QLocale.Language.English, QtCore.QLocale.Country.UnitedStates)
+        colorDialog.setLocale(usLocale)
+        colorDialog.setWindowTitle("Choose Material Color")
+        colorDialog.setCurrentColor(self.chosenColor)
+
+        for child in colorDialog.findChildren(QtWidgets.QDialogButtonBox):
+            for button in child.buttons():
+                if button.text() == "OK":
+                    button.setStyleSheet("""
+                        QPushButton {background-color: #25A259; color: white; border-radius: 6px; padding: 12px; width: 150px;}
+                        QPushButton:hover {background-color: #2ECC71;}""")
+                elif button.text() == "Cancel":
+                    button.setStyleSheet("""
+                        QPushButton {background-color: #BE3F31; color: white; border-radius: 6px; padding: 12px; width: 150px;} 
+                        QPushButton:hover {background-color: #E74C3C;}""")
+             
+
+
+            if colorDialog.exec() == QtWidgets.QDialog.Accepted:
+                color = colorDialog.currentColor()
+                self.chosenColor = color
+                self.colorButton.setStyleSheet(
+                    f"QPushButton {{ background-color: {color.name()}; color: white; padding: 6px; }}"
+                    )
 
     def reset_ui(self):
         self.prefixLine.clear()
@@ -86,68 +126,82 @@ class BatchMaterialTool(QtWidgets.QDialog):
         self.materialList.clear()
 
     def rename_and_assign(self):
+
         prefix = self.prefixLine.text()
         suffix = self.suffixLine.text()
         start = self.startSpin.value()
         mat_type = self.typeCombo.currentText()
+        color = [self.chosenColor.redF(), self.chosenColor.greenF(), self.chosenColor.blueF()]
 
         selected_objs = cmds.ls(selection=True, long=True)
         if not selected_objs:
+            cmds.warning("Please select at least one object.")
             return
 
-        count = start
         renamed_info = []
+        for i, obj in enumerate(selected_objs):
+            results = batchMaterialToolUtil.process_materials(
+                obj=obj,
+                mat_type=mat_type,
+                color=color,
+                prefix=prefix,
+                suffix=suffix,
+                start=start + i,
+                unique=self.uniqueCheckbox.isChecked(),
+                assign_if_none=self.assign_if_noneCheckbox.isChecked()
+            )
+            renamed_info.extend(results)
 
-        for obj in selected_objs:
-            shading_groups = cmds.listConnections(obj, type='shadingEngine') or []
-            mats = []
+        if hasattr(self, "randomColorCheckbox") and self.randomColorCheckbox.isChecked():
+            for old_name, new_name in renamed_info:
+                if cmds.objExists(new_name + ".color"):
+                    r = random.uniform(0.0, 1.0)
+                    g = random.uniform(0.0, 1.0)
+                    b = random.uniform(0.0, 1.0)
+                    cmds.setAttr(f"{new_name}.color", r, g, b, type="double3")
 
-            for sg in shading_groups:
-                mats += cmds.ls(cmds.listConnections(sg + ".surfaceShader"), materials=True) or []
-
-            if not mats and self.assign_if_noneCheckbox.isChecked():
-                mat = self.create_material(mat_type)
-                self.assign_material(obj, mat)
-                mats = [mat]
-
-            for mat in mats:
-                new_name = "_".join([p for p in [prefix, mat, str(count), suffix] if p])
-                if cmds.objExists(new_name):
-                    continue
-
-                new_mat = cmds.rename(mat, new_name)
-                renamed_info.append((mat, new_mat))
-                count += 1
-
-                rgb = [self.chosenColor.redF(), self.chosenColor.greenF(), self.chosenColor.blueF()]
-                if cmds.objExists(new_mat + ".color"):
-                    cmds.setAttr(new_mat + ".color", *rgb, type="double3")
-
-                self.assign_material(obj, new_mat)
-
+            cmds.inViewMessage(amg='<hl>Random colors applied!</hl>', pos='midCenter', fade=True)
 
         self.materialList.clear()
         for old, new in renamed_info:
             self.materialList.addItem(f"{old} → {new}")
 
+    def preview_materials(self):
+        
+        self.materialList.clear()
 
-    def create_material(self, mat_type):
+        selected_objs = cmds.ls(selection=True, long=True)
+        materials = []
 
-        if mat_type.lower() == "lambert":
-            mat = cmds.shadingNode("lambert", asShader=True)
-        elif mat_type.lower() == "blinn":
-            mat = cmds.shadingNode("blinn", asShader=True)
+        if selected_objs:
+            for obj in selected_objs:
+                shapes = cmds.listRelatives(obj, shapes=True, fullPath=True) or [obj]
+                for s in shapes:
+                    shadingGroups = cmds.listConnections(s, type='shadingEngine') or []
+                    for sg in shadingGroups:
+                        mats = cmds.ls(cmds.listConnections(sg + ".surfaceShader"), materials=True) or []
+                        materials.extend(mats)
         else:
-            mat = cmds.shadingNode("standardSurface", asShader=True)
-        return mat
+            materials = cmds.ls(materials=True)
+        materials = list(set(materials))
 
-    def assign_material(self, obj, mat):
- 
-        sg = mat + "SG"
-        if not cmds.objExists(sg):
-            sg = cmds.sets(renderable=True, noSurfaceShader=True, empty=True, name=sg)
-            cmds.connectAttr(mat + ".outColor", sg + ".surfaceShader", force=True)
-        cmds.sets(obj, edit=True, forceElement=sg)
+        if not materials:
+            self.materialList.addItem("No materials found.")
+            return
+
+        for mat in materials:
+            if cmds.attributeQuery("color", node=mat, exists=True):
+                color = cmds.getAttr(f"{mat}.color")[0]
+                r, g, b = [int(c * 255) for c in color]
+                item = QtWidgets.QListWidgetItem(f"{mat}  |  RGB: ({r}, {g}, {b})")
+                item.setBackground(QtGui.QColor(r, g, b))
+                item.setForeground(QtGui.QColor(255 - r, 255 - g, 255 - b))
+                self.materialList.addItem(item)
+            else:
+                self.materialList.addItem(f"{mat} (no color attribute)")
+
+
+
 
 
 def run():
